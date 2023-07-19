@@ -3,18 +3,21 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\PostResource\Pages;
-use App\Filament\Resources\PostResource\RelationManagers;
+use App\Filament\Resources\PostResource\Pages\ListPosts;
+use App\Filament\Resources\PostResource\RelationManagers\CommentsRelationManager;
 use App\Filament\Resources\PostResource\RelationManagers\TagsRelationManager;
 use App\Filament\Resources\PostResource\Widgets\StatsOverview;
+use App\Helpers\Helper;
 use App\Models\Post;
-use App\Models\User;
 use Carbon\Carbon;
 use Closure;
-use Dompdf\FrameDecorator\Page;
 use Filament\Forms;
 use Filament\Forms\Components\Card;
-use Filament\Forms\Components\DatePicker;
-use Filament\Forms\Components\FileUpload;
+use Filament\Forms\Components\Fieldset;
+use Filament\Forms\Components\Grid;
+use Filament\Forms\Components\Hidden;
+use Filament\Forms\Components\Placeholder;
+use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\RichEditor;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
@@ -27,18 +30,24 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Columns\ToggleColumn;
 use Filament\Tables\Contracts\HasTable;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\SoftDeletingScope;
 use Filament\Forms\Components\SpatieMediaLibraryFileUpload;
-use Filament\Notifications\Collection;
-use Filament\Notifications\Notification;
+use Filament\Forms\Components\Textarea;
+use Filament\Forms\Components\ViewField;
+use Filament\Resources\Pages\EditRecord;
 use Filament\Tables\Actions\Action;
-use Filament\Tables\Actions\BulkAction;
-use Filament\Tables\Actions\CreateAction;
+use Filament\Tables\Actions\RestoreAction;
 use Filament\Tables\Columns\SpatieMediaLibraryImageColumn;
+use Filament\Tables\Columns\TextInputColumn;
 use Filament\Tables\Filters\Filter;
 use Filament\Tables\Filters\SelectFilter;
-use Filament\Tables\Filters\TernaryFilter;
-use Illuminate\Database\Eloquent\Model;
+use Filament\Widgets\StatsOverviewWidget;
+use Illuminate\Support\Facades\Auth;
+use League\CommonMark\Normalizer\TextNormalizer;
+use Malzariey\FilamentDaterangepickerFilter\Filters\DateRangeFilter;
+use Nette\Utils\Random;
+use PhpParser\Node\Expr\Cast\Object_;
+use PhpParser\Node\Stmt\Label;
+use Illuminate\Database\Eloquent\SoftDeletingScope;
 
 class PostResource extends Resource
 {
@@ -60,6 +69,7 @@ class PostResource extends Resource
 
     public static function form(Form $form): Form
     {
+
         return $form
             ->schema([
                 Card::make()->schema([
@@ -73,8 +83,13 @@ class PostResource extends Resource
                     TextInput::make('slug')->required(),
                     SpatieMediaLibraryFileUpload::make('cover'),
                     RichEditor::make('content'),
-                    Toggle::make('status')
-                ])
+                    Toggle::make('status'),
+                    Hidden::make('users_id')
+                        ->default(Auth::user()->id),
+                    TextInput::make('total_comment')
+                        ->reactive()
+                        ->disabled()
+                ]),
             ]);
     }
 
@@ -90,50 +105,54 @@ class PostResource extends Resource
                         );
                     }
                 ),
+
                 TextColumn::make('title')->limit('50')->sortable()->searchable(),
                 TextColumn::make('category.name')->toggleable(isToggledHiddenByDefault: true),
                 SpatieMediaLibraryImageColumn::make('cover'),
                 ToggleColumn::make('status')
                     ->visible(fn () => auth()->user()->hasRole('admin')),
 
+
             ])
             ->filters([
+                Tables\Filters\TrashedFilter::make(),
                 Filter::make('publish')
                     ->query(fn (Builder $query): Builder => $query->where('status', true)),
                 Filter::make('draft')
                     ->query(fn (Builder $query): Builder => $query->where('status', false)),
                 SelectFilter::make('Category')->relationship('category', 'name'),
 
-                Filter::make('created_at')
-                    ->form([
-                        Forms\Components\DatePicker::make('From'),
-                        Forms\Components\DatePicker::make('Until'),
-                    ])
-                    ->indicateUsing(function (array $data): array {
-                        $indicators = [];
+                DateRangeFilter::make('created_at')
+                    ->withIndicator(),
+                // Filter::make('created_at')
+                // ->form([
+                //     Forms\Components\DatePicker::make('From'),
+                //     Forms\Components\DatePicker::make('Until'),
+                // ])
+                // ->indicateUsing(function (array $data): array {
+                //     $indicators = [];
 
-                        if ($data['From'] ?? null) {
-                            $indicators['from'] = 'Created from ' . Carbon::parse($data['From'])->toFormattedDateString();
-                        }
+                //     if ($data['From'] ?? null) {
+                //         $indicators['from'] = 'Created from ' . Carbon::parse($data['From'])->toFormattedDateString();
+                //     }
 
-                        if ($data['Until'] ?? null) {
-                            $indicators['until'] = 'Created until ' . Carbon::parse($data['Until'])->toFormattedDateString();
-                        }
+                //     if ($data['Until'] ?? null) {
+                //         $indicators['until'] = 'Created until ' . Carbon::parse($data['Until'])->toFormattedDateString();
+                //     }
 
-                        return $indicators;
-                    })
-                    ->query(function (Builder $query, array $data): Builder {
-                        return $query
-                            ->when(
-                                $data['From'],
-                                fn (Builder $query, $date): Builder => $query->whereDate('created_at', '>=', $date),
-                            )
-                            ->when(
-                                $data['Until'],
-                                fn (Builder $query, $date): Builder => $query->whereDate('created_at', '<=', $date),
-                            );
-                    }),
-
+                //     return $indicators;
+                // })
+                // ->query(function (Builder $query, array $data): Builder {
+                //     return $query
+                //         ->when(
+                //             $data['From'],
+                //             fn (Builder $query, $date): Builder => $query->whereDate('created_at', '>=', $date),
+                //         )
+                //         ->when(
+                //             $data['Until'],
+                //             fn (Builder $query, $date): Builder => $query->whereDate('created_at', '<=', $date),
+                //         );
+                // }),
             ])
             ->actions([
                 Tables\Actions\EditAction::make(),
@@ -141,18 +160,32 @@ class PostResource extends Resource
                     ->color('info')
                     ->icon('heroicon-o-download')
                     ->url(fn (Post $record) => route('download.image', $record))
-                    ->openUrlInNewTab()
+                    ->openUrlInNewTab(),
+                    Tables\Actions\DeleteAction::make(),
+                    Tables\Actions\ForceDeleteAction::make(),
+                    Tables\Actions\RestoreAction::make(),
             ])
             ->bulkActions([
                 Tables\Actions\DeleteBulkAction::make(),
+                Tables\Actions\ForceDeleteBulkAction::make(),
+                Tables\Actions\RestoreBulkAction::make(),
             ]);
     }
 
     public static function getRelations(): array
     {
         return [
-            TagsRelationManager::class
+            TagsRelationManager::class,
+            CommentsRelationManager::class
         ];
+    }
+
+    public static function getEloquentQuery(): Builder
+    {
+        return parent::getEloquentQuery()
+            ->withoutGlobalScopes([
+                SoftDeletingScope::class
+            ]);
     }
 
 
